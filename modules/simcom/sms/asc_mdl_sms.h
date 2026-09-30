@@ -30,7 +30,7 @@
 typedef struct asc_mdl_sms_msg_t {
   uint8_t format;
   char num[64];  
-  char msg[161];     
+  char msg[161];  /* NUL-terminated text, up to 160 bytes; encoding is caller-owned. */
   uint16_t index;
   uint8_t mode;
 } asc_mdl_sms_msg_t;
@@ -64,6 +64,10 @@ bool asc_mdl_sms_sc_set(asc_context_t* const ctx, const asc_entity_cb_t cb, cons
 
 /*******************************************************************************
  ** @brief  Function to send text sms
+ **         Sends up to 160 caller-supplied bytes; does not validate the text.
+ **         The modem remains in text mode with the GSM charset.
+ **         The payload is submitted once; +CMGS confirms success, and the
+ **         following OK is consumed when present.
  ** @param  ctx    core context
  ** @param  cb     cb when proc will be done. Can be NULL
  ** @param  param  input param if function is required them. Here is @asc_mdl_sms_msg_t

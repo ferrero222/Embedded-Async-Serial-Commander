@@ -48,7 +48,8 @@ VPATH := . \
 	../core \
 	../modules/simcom/general \
 	../modules/simcom/sms \
-	../modules/simcom/tcp \
+	../modules/simcom/gprs \
+	../modules/simcom/mqtt \
 	../libs/ringslice/src \
 	$(ET_DIR)
 
@@ -60,7 +61,8 @@ INCLUDES := -I. \
 	-I../port \
 	-I../modules/simcom/general \
 	-I../modules/simcom/sms \
-	-I../modules/simcom/tcp \
+	-I../modules/simcom/gprs \
+	-I../modules/simcom/mqtt \
 	-I../libs/ringslice/src \
 	-I../libs/ringslice/src/config \
 	-I$(ET_DIR)
@@ -76,8 +78,9 @@ C_SRCS := \
 	asc_core.c \
 	asc_mdl_general.c \
 	asc_mdl_sms.c \
-	asc_mdl_tcp.c \
-	asc_mdl_tcp_server.c \
+	asc_mdl_gprs.c \
+	asc_mdl_gprs_server.c \
+	asc_mdl_mqtt.c \
 	ringslice.c \
 	ringslice_scanf.c \
 	test.c \
@@ -92,7 +95,9 @@ LIB_DIRS :=
 LIBS     :=
 
 # defines...
-DEFINES  := -DASC_TEST
+# Use a larger pool for host tests because 64-bit hosts have wider pointers
+# and therefore larger queued descriptors than the embedded 32-bit targets.
+DEFINES  := -DASC_TEST -DASC_MEMORY_POOL_SIZE=8192
 
 #============================================================================
 # Typically you should not need to change anything below this line
@@ -105,9 +110,9 @@ DEFINES  := -DASC_TEST
 #     https://www.state-machine.com/qtools
 # It is assumed that %QTOOLS%\bin directory is added to the PATH
 #
-CC    := gcc
-CPP   := g++
-LINK  := gcc    # for C programs
+CC    = gcc
+CPP   = g++
+LINK  = $(CC) # for C programs
 #LINK  := g++   # for C++ programs
 
 #-----------------------------------------------------------------------------
@@ -130,18 +135,17 @@ endif
 #-----------------------------------------------------------------------------
 # build options...
 
-BIN_DIR := build
+BIN_DIR ?= build
 
-CFLAGS  := -c -g -O0 -fno-pie -std=c11 -pedantic -Wall -Wextra -W \
-        -m32 \
-	$(INCLUDES) $(DEFINES) -DQ_HOST
+CFLAGS  ?= -g -O0 -fno-pie -std=c11 -pedantic -Wall -Wextra -W
+ARCH_FLAGS ?=
+C_BUILD_FLAGS = $(CFLAGS) $(ARCH_FLAGS) $(INCLUDES) $(DEFINES) -DQ_HOST
 
-CPPFLAGS := -c -g -O0 -fno-pie -std=c++11 -pedantic -Wall -Wextra \
-	-fno-rtti -fno-exceptions \
-	$(INCLUDES) $(DEFINES) -DQ_HOST
+CPPFLAGS ?= -g -O0 -fno-pie -std=c++11 -pedantic -Wall -Wextra -fno-rtti -fno-exceptions
+CPP_BUILD_FLAGS = $(CPPFLAGS) $(ARCH_FLAGS) $(INCLUDES) $(DEFINES) -DQ_HOST
 
 ifndef GCC_OLD
-	LINKFLAGS := -no-pie -m32
+	LINKFLAGS ?= -no-pie
 endif
 
 ifdef GCOV
@@ -164,32 +168,31 @@ CPP_DEPS_EXT := $(patsubst %.o,%.d, $(CPP_OBJS_EXT))
 # rules
 #
 
-.PHONY : norun clean show
+.PHONY : all run norun check test clean show
 
-ifeq ($(MAKECMDGOALS),norun)
-all : $(TARGET_EXE)
-norun : all
-else
-all : $(TARGET_EXE) run
-endif
+all : check
+norun : $(TARGET_EXE)
 
 $(TARGET_EXE) : $(C_OBJS_EXT) $(CPP_OBJS_EXT)
-	$(LINK) $(LINKFLAGS) $(LIB_DIRS) -o $@ $^ $(LIBS)
+	$(LINK) $(LINKFLAGS) $(ARCH_FLAGS) $(LIB_DIRS) -o $@ $^ $(LIBS)
 
 run : $(TARGET_EXE)
 	$(TARGET_EXE)
 
+check test : $(TARGET_EXE)
+	$(TARGET_EXE)
+
 $(BIN_DIR)/%.d : %.cpp
-	$(CPP) -MM -MT $(@:.d=.o) $(CPPFLAGS) $< > $@
+	$(CPP) -MM -MT $(@:.d=.o) $(CPP_BUILD_FLAGS) $< > $@
 
 $(BIN_DIR)/%.d : %.c
-	$(CC) -MM -MT $(@:.d=.o) $(CFLAGS) $< > $@
+	$(CC) -MM -MT $(@:.d=.o) $(C_BUILD_FLAGS) $< > $@
 
 $(BIN_DIR)/%.o : %.c
-	$(CC) $(CFLAGS) $< -o $@
+	$(CC) -c $(C_BUILD_FLAGS) $< -o $@
 
 $(BIN_DIR)/%.o : %.cpp
-	$(CPP) $(CPPFLAGS) $< -o $@
+	$(CPP) -c $(CPP_BUILD_FLAGS) $< -o $@
 
 # create BIN_DIR and include dependencies only if needed
 ifneq ($(MAKECMDGOALS),clean)
@@ -204,10 +207,13 @@ endif
 endif
 
 clean :
-	-$(RM) $(BIN_DIR)/*.*
+	-$(RM) $(C_OBJS_EXT) $(C_DEPS_EXT) $(CPP_OBJS_EXT) $(CPP_DEPS_EXT) $(TARGET_EXE)
 
 show :
 	@echo PROJECT      = $(PROJECT)
+	@echo CC           = $(CC)
+	@echo ARCH_FLAGS   = $(ARCH_FLAGS)
+	@echo CFLAGS       = $(C_BUILD_FLAGS)
 	@echo TARGET_EXE   = $(TARGET_EXE)
 	@echo VPATH        = $(VPATH)
 	@echo C_SRCS       = $(C_SRCS)

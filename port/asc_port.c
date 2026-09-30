@@ -13,9 +13,8 @@
 #include "asc_core.h"
 
 #ifndef ASC_TEST
-  #include "stdarg.h"
+  #include <stdarg.h>
   #include <stdio.h>
-  #include "hc32f460_utility.h"
 #endif
 
 /*******************************************************************************
@@ -41,14 +40,11 @@
  ** @param  none
  ** @return none
  ******************************************************************************/
-DBC_NORETURN void DBC_fault_handler(char const* module, int label) 
+DBC_NORETURN void DBC_fault_handler(char const* module, int label)
 {
   (void)module;
   (void)label;
-  while (1) 
-  {
-    /* Typically you would trigger a system reset or safe state here */
-  }
+  for(;;) { /* Override or replace this port for a target-specific safe state. */ }
 }
 
 /*******************************************************************************
@@ -56,9 +52,10 @@ DBC_NORETURN void DBC_fault_handler(char const* module, int label)
  ** @param  none
  ** @return none
  ******************************************************************************/
-static void asc_crit_enter(void) 
-{ 
-  //__disable_irq();
+#ifndef ASC_TEST
+static void asc_crit_enter(void)
+{
+  ASC_PORT_ENTER_CRITICAL();
 }
 
 /*******************************************************************************
@@ -66,10 +63,11 @@ static void asc_crit_enter(void)
  ** @param  none
  ** @return none
  ******************************************************************************/
-static void asc_crit_exit(void)  
+static void asc_crit_exit(void)
 {
-  //__enable_irq();
+  ASC_PORT_EXIT_CRITICAL();
 }
+#endif
 
 /*******************************************************************************
  ** @brief  Printf
@@ -79,77 +77,61 @@ static void asc_crit_exit(void)
 #ifndef ASC_TEST
 void asc_printf_safe(asc_context_t* const ctx, const char *fmt, ...) 
 {
-  if(!ctx) return;
+  if(!ctx || !fmt) return;
   asc_init_t atl = asc_get_init(ctx); 
   if(!atl.asc_printf) return;
+
   va_list args;
   va_start(args, fmt);
   char buffer[512];
-  int total_processed = 0;
-  va_list args_len;
-  va_copy(args_len, args);
-  int total_len = vsnprintf(NULL, 0, fmt, args_len);
-  va_end(args_len);
-  if(total_len < 0) 
-  {
-    va_end(args);
-    return;
-  }
-  while(total_processed < total_len) 
-  {
-    int fragment_len = vsnprintf(buffer, sizeof(buffer), fmt + total_processed, args);
-    if(fragment_len <= 0) break;
-    
-    char escaped[sizeof(buffer)]; 
-    int escaped_pos = 0;
-    
-    for(int i = 0; i < fragment_len && buffer[i] != '\0'; i++) 
-    {
-      char c = buffer[i];
-      switch (c) 
-      {
-        case '\r': if(escaped_pos < sizeof(escaped)-3) { escaped[escaped_pos++] = '\\'; escaped[escaped_pos++] = 'r';  } break;
-        case '\n': if(escaped_pos < sizeof(escaped)-3) { escaped[escaped_pos++] = '\\'; escaped[escaped_pos++] = 'n';  } break;
-        case '\t': if(escaped_pos < sizeof(escaped)-3) { escaped[escaped_pos++] = '\\'; escaped[escaped_pos++] = 't';  } break;
-        case '\\': if(escaped_pos < sizeof(escaped)-3) { escaped[escaped_pos++] = '\\'; escaped[escaped_pos++] = '\\'; } break;
-        default: 
-            if (c >= 32 && c <= 126) 
-            {
-              if(escaped_pos < sizeof(escaped)-1) escaped[escaped_pos++] = c;
-            } 
-            else 
-            {
-              if(escaped_pos < sizeof(escaped)-5) 
-              {
-                escaped[escaped_pos++] = '\\';
-                escaped[escaped_pos++] = 'x';
-                escaped[escaped_pos++] = "0123456789ABCDEF"[(c >> 4) & 0xF];
-                escaped[escaped_pos++] = "0123456789ABCDEF"[c & 0xF];
-              }
-            }
-            break;
-      }
-    }
-    
-    if(escaped_pos > 0) 
-    {
-      if(escaped_pos < sizeof(escaped)-2) 
-      {
-        escaped[escaped_pos++] = '\n';
-        escaped[escaped_pos] = '\0';
-      } 
-      else 
-      {
-        escaped[sizeof(escaped)-2] = '\n';
-        escaped[sizeof(escaped)-1] = '\0';
-      }
-      atl.asc_printf(escaped);
-    }
-    total_processed += fragment_len;
-    va_end(args);
-    va_start(args, fmt);
-  }
+  int formatted_len = vsnprintf(buffer, sizeof(buffer), fmt, args);
   va_end(args);
+  if(formatted_len < 0) return;
+
+  size_t input_len = 0;
+  while(input_len < sizeof(buffer) && buffer[input_len] != '\0') ++input_len;
+  bool truncated = (size_t)formatted_len >= sizeof(buffer);
+  char escaped[sizeof(buffer) * 4u + 8u];
+  size_t escaped_pos = 0;
+  static const char hex[] = "0123456789ABCDEF";
+  for(size_t i = 0; i < input_len; ++i)
+  {
+    uint8_t c = (uint8_t)buffer[i];
+    const char* replacement = NULL;
+    switch(c)
+    {
+      case '\r': replacement = "\\r"; break;
+      case '\n': replacement = "\\n"; break;
+      case '\t': replacement = "\\t"; break;
+      case '\\': replacement = "\\\\"; break;
+      default: break;
+    }
+    if(replacement)
+    {
+      escaped[escaped_pos++] = replacement[0];
+      escaped[escaped_pos++] = replacement[1];
+    }
+    else if(c >= 32u && c <= 126u)
+    {
+      escaped[escaped_pos++] = (char)c;
+    }
+    else
+    {
+      escaped[escaped_pos++] = '\\';
+      escaped[escaped_pos++] = 'x';
+      escaped[escaped_pos++] = hex[c >> 4];
+      escaped[escaped_pos++] = hex[c & 0x0fu];
+    }
+  }
+  if(truncated)
+  {
+    escaped[escaped_pos++] = '.';
+    escaped[escaped_pos++] = '.';
+    escaped[escaped_pos++] = '.';
+  }
+  escaped[escaped_pos++] = '\n';
+  escaped[escaped_pos] = '\0';
+  atl.asc_printf(escaped);
 }
 
 /*******************************************************************************
@@ -179,8 +161,8 @@ static volatile uint32_t asc_crit_counter = 0;
 void _asc_crit_enter(void) 
 { 
   #ifndef ASC_TEST
-  asc_crit_enter();
-  asc_crit_counter++;
+  if(asc_crit_counter == 0) asc_crit_enter();
+  if(asc_crit_counter < UINT32_MAX) ++asc_crit_counter;
   #endif
 }
 
@@ -189,8 +171,8 @@ void _asc_crit_exit(void)
   #ifndef ASC_TEST
   if(asc_crit_counter > 0) 
   {
-    asc_crit_counter--;
-    if (asc_crit_counter == 0) asc_crit_exit();
+    --asc_crit_counter;
+    if(asc_crit_counter == 0) asc_crit_exit();
   }
   #endif
 }

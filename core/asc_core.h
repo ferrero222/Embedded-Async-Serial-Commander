@@ -16,24 +16,62 @@
 #include <stdbool.h> 
 #include <string.h>
 #include <assert.h>
+#include <stddef.h>
 #include "o1heap.h"
 #include "ringslice.h"
 
 /*******************************************************************************
  * Config
  ******************************************************************************/
-#define ASC_MAX_ITEMS_PER_ENTITY   50     //Max amount of AT cmds in one group (if you need to change, check step field sizes also)
-  
-#define ASC_ENTITY_QUEUE_SIZE      10     //Max amount of groups 
-  
-#define ASC_URC_QUEUE_SIZE         10     //Amount of handled URC
+#ifndef ASC_MAX_ITEMS_PER_ENTITY
+  #define ASC_MAX_ITEMS_PER_ENTITY   50u
+#endif
+#ifndef ASC_ENTITY_QUEUE_SIZE
+  #define ASC_ENTITY_QUEUE_SIZE      10u
+#endif
+#ifndef ASC_URC_QUEUE_SIZE
+  #define ASC_URC_QUEUE_SIZE         10u
+#endif
+#ifndef ASC_URC_FREQ_CHECK
+  #define ASC_URC_FREQ_CHECK         10u
+#endif
+#ifndef ASC_MEMORY_POOL_SIZE
+  #define ASC_MEMORY_POOL_SIZE       4096u
+#endif
+#ifndef ASC_URC_PREFIX_MAX_LEN
+  #define ASC_URC_PREFIX_MAX_LEN     63u
+#endif
+#ifndef ASC_MAX_URCS_PER_PROC
+  #define ASC_MAX_URCS_PER_PROC      4u
+#endif
+#ifndef ASC_DEBUG_ENABLED
+  #ifdef ASC_TEST
+    #define ASC_DEBUG_ENABLED        0
+  #else
+    #define ASC_DEBUG_ENABLED        1
+  #endif
+#endif
 
-#define ASC_URC_FREQ_CHECK         10     //Check urc each ASC_URC_FREQ_CHECK*10ms
-
-#define ASC_MEMORY_POOL_SIZE       4096   //Memory pool for custom heap
-
-#ifndef ASC_TEST  
-  #define ASC_DEBUG_ENABLED        1      //Recommend to turn on DEBUG logs
+#if ASC_MAX_ITEMS_PER_ENTITY < 1 || ASC_MAX_ITEMS_PER_ENTITY > UINT8_MAX
+  #error "ASC_MAX_ITEMS_PER_ENTITY must fit in asc_item_t::item_cnt"
+#endif
+#if ASC_ENTITY_QUEUE_SIZE < 1 || ASC_ENTITY_QUEUE_SIZE > UINT8_MAX
+  #error "ASC_ENTITY_QUEUE_SIZE must be in range 1..255"
+#endif
+#if ASC_URC_QUEUE_SIZE < 1 || ASC_URC_QUEUE_SIZE > UINT8_MAX
+  #error "ASC_URC_QUEUE_SIZE must be in range 1..255"
+#endif
+#if ASC_URC_FREQ_CHECK < 1
+  #error "ASC_URC_FREQ_CHECK must be greater than zero"
+#endif
+#if ASC_MAX_URCS_PER_PROC < 1 || ASC_MAX_URCS_PER_PROC > UINT8_MAX
+  #error "ASC_MAX_URCS_PER_PROC must be in range 1..255"
+#endif
+#if ASC_URC_PREFIX_MAX_LEN < 1 || ASC_URC_PREFIX_MAX_LEN > UINT16_MAX
+  #error "ASC_URC_PREFIX_MAX_LEN must fit within the ring-slice length type"
+#endif
+#if ASC_MEMORY_POOL_SIZE < 256
+  #error "ASC_MEMORY_POOL_SIZE is too small for O1Heap"
 #endif
 
 /*******************************************************************************
@@ -52,27 +90,27 @@
 #define ASC_URC_SIZE             sizeof(asc_urc_queue_t)
 
 #define ASC_ITEM(req_, prefix_, parce_type_, retries_, timeout_, err_step_, ok_step_, cb_, format_, ...) \
-{ \
-  .req = req_, \
-  .parce_type = parce_type_, \
-  .answ = \
-  { \
-    .prefix = prefix_, \
-    .format = format_, \
-    .ptrs = (void*[]){__VA_ARGS__, ASC_NO_ARG}, \
-    .cb = cb_ \
-  }, \
-  .meta = \
-  { \
-    .wait = timeout_, \
-    .rpt_cnt = retries_, \
-    .err_step = err_step_, \
-    .ok_step = ok_step_ \
-  } \
+{                                                                                                        \
+  .req = req_,                                                                                           \
+  .parce_type = parce_type_,                                                                             \
+  .answ =                                                                                                \
+  {                                                                                                      \
+    .prefix = prefix_,                                                                                   \
+    .format = format_,                                                                                   \
+    .ptrs = (void*[]){__VA_ARGS__, ASC_NO_ARG},                                                          \
+    .cb = cb_                                                                                            \
+  },                                                                                                     \
+  .meta =                                                                                                \
+  {                                                                                                      \
+    .wait = timeout_,                                                                                    \
+    .rpt_cnt = retries_,                                                                                 \
+    .err_step = err_step_,                                                                               \
+    .ok_step = ok_step_                                                                                  \
+  }                                                                                                      \
 }
 
 #define ASC_ARG(src, field) ((void*)offsetof(src, field))
-#define ASC_NO_ARG           (void*)0xFFFF
+#define ASC_NO_ARG          (void*)0xFFFF
 
 #define ASC_CRITICAL_ENTER  _asc_crit_enter();
 #define ASC_CRITICAL_EXIT   _asc_crit_exit();
@@ -99,10 +137,11 @@ typedef struct asc_item_t
 {
   char* req;  //Sended request, could be string or literal
   asc_parce_type_t parce_type;
+  uint8_t owned; //Internal ownership flags for copied req and prefix
   struct{
     char *prefix;        //Prefix to find in answer
     char *format;        //format for parcing answer
-    void **ptrs;         //VA ARGS for format, ptr to ptr array
+    void **ptrs;         //Offsets to output fields, resolved when enqueued
     answ_parce_cb_t cb;  //Callback by the end
   } answ;
   struct {
@@ -157,6 +196,9 @@ typedef struct asc_entity_t{
   void*             data;       //usefull data from execution
   void*             meta;       //meta data
   uint16_t          data_size;  //usefull data size
+  uint16_t          tx_offset;  //request bytes already accepted by asc_write
+  uint16_t          tx_timer;   //timeout budget while a partial request is being written
+  bool              tx_started; //request transmission has started
   asc_proc_states_t state;      //state
 } asc_entity_t;
 
@@ -171,8 +213,13 @@ typedef struct asc_context_t {
   asc_entity_queue_t entity_queue; //entity queue
   asc_urc_queue_t urc_queue[ASC_URC_QUEUE_SIZE]; //urc queue
   asc_init_t init_struct; //init struct
-  uint8_t mem_pool[ASC_MEMORY_POOL_SIZE] __attribute__((aligned(O1HEAP_ALIGNMENT)));
+  #ifdef __cplusplus
+  alignas(O1HEAP_ALIGNMENT) uint8_t mem_pool[ASC_MEMORY_POOL_SIZE];
+  #else
+  _Alignas(O1HEAP_ALIGNMENT) uint8_t mem_pool[ASC_MEMORY_POOL_SIZE];
+  #endif
   uint32_t time;
+  bool proc_active;  //guards the active entity against reentrant proc/dequeue/deinit
 } asc_context_t;
 
 /*******************************************************************************
@@ -189,6 +236,8 @@ typedef struct asc_context_t {
  ** @param  rx_buff    struct to ring buffer
  ** @return none
  ******************************************************************************/
+/* The context must be zero-initialized before its first initialization. */
+bool asc_init_ex(asc_context_t* const ctx, const asc_printf_t asc_printf, const asc_write_t asc_write, asc_ring_buffer_t* rx_buff);
 void asc_init(asc_context_t* const ctx, const asc_printf_t asc_printf, const asc_write_t asc_write, asc_ring_buffer_t* rx_buff);
 
 /*******************************************************************************
@@ -197,6 +246,8 @@ void asc_init(asc_context_t* const ctx, const asc_printf_t asc_printf, const asc
  ** @return none
  ******************************************************************************/
 void asc_deinit(asc_context_t* const ctx);
+/** Return false without changing the context if processing is currently active. */
+bool asc_deinit_ex(asc_context_t* const ctx);
 
 /*******************************************************************************
  ** @brief  Function to append main queue with new group of at cmds
@@ -233,7 +284,7 @@ bool asc_urc_enqueue(asc_context_t* const ctx, const asc_urc_queue_t* const urc)
  ** @param  prefix  prefix of your URC.
  ** @return true/false
  ******************************************************************************/
-bool asc_urc_dequeue(asc_context_t* const ctx, char* prefix);
+bool asc_urc_dequeue(asc_context_t* const ctx, const char* prefix);
 
 /*******************************************************************************
  ** @brief  Function to proc ATL core proccesses. 
@@ -241,6 +292,16 @@ bool asc_urc_dequeue(asc_context_t* const ctx, char* prefix);
  ** @return none
  ******************************************************************************/
 void asc_core_proc(asc_context_t* const ctx);
+
+/*******************************************************************************
+ ** @brief Append received bytes to the core RX ring buffer.
+ ** @param ctx Core context
+ ** @param data Received bytes
+ ** @param len Number of bytes
+ ** @return true if every byte was accepted; false if input is invalid or the
+ **         ring buffer does not have enough free space.
+ ******************************************************************************/
+bool asc_rx_push(asc_context_t* const ctx, const uint8_t* const data, uint16_t len);
 
 /*******************************************************************************
  ** @brief  Function get time in 10ms. 

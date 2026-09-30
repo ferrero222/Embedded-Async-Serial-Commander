@@ -16,7 +16,7 @@
 #include "hc32f460_utility.h"
 #include "asc_core.h"
 #include "asc_mdl_general.h"
-#include "asc_mdl_tcp.h"
+#include "asc_mdl_gprs.h"
 #include "asc_chain.h"
 #include "wialon.h"
 
@@ -72,8 +72,8 @@ static bool asc_rtd_check(void)
  ** \param  None
  ** \retval None
  ******************************************************************************/ 
-static asc_mdl_tcp_data_t asc_server_data = {0};
-static asc_mdl_tcp_server_t asc_server_connect = {.mode = "TCP", .ip = "YOUR_IP", .port = "YOUR_PORT"};
+static asc_mdl_gprs_data_t asc_server_data = {0};
+static asc_mdl_gprs_server_t asc_server_connect = {.mode = "TCP", .ip = "YOUR_IP", .port = "YOUR_PORT"};
 
 /* Clean wialon msg cb */
 static bool asc_server_data_clean(void)
@@ -129,7 +129,7 @@ asc_chain_t* test_chain_init(void)
   chain_step_t tcp_steps[] = 
   {   
     //Main
-    ASC_CHAIN("INIT_MODEM", "NEXT", "MODEM_RESTART", asc_mdl_modem_init, NULL, NULL, NULL, 1),
+    ASC_CHAIN("INIT_MODEM", "NEXT", "MODEM RESTART", asc_mdl_modem_init, NULL, NULL, NULL, 1),
     ASC_CHAIN("GPRS INIT", "NEXT", "GPRS DEINIT", asc_mdl_gprs_init, NULL, NULL, NULL, 1),
     ASC_CHAIN("SOCKET CONFIG", "NEXT", "GPRS INIT", asc_mdl_gprs_socket_config, NULL, NULL, NULL, 1),
     ASC_CHAIN("CONNECT TO SERVER", "NEXT", "SOCKET CONFIG", asc_mdl_gprs_socket_connect, NULL, &asc_server_connect, NULL, 1),
@@ -140,7 +140,7 @@ asc_chain_t* test_chain_init(void)
     ASC_CHAIN("SEND WIALON LOGIN", "NEXT", "DISCONNECT FROM SERVER", asc_mdl_gprs_socket_send_recieve, NULL, &asc_server_data, NULL, 3),
     
     ASC_CHAIN_LOOP_START(10),
-      ASC_CHAIN("GET RTD", "NEXT", "DISCONNECT FROM SERVER", asc_mdl_rtd, asc_rtd_cb, NULL, NULL, 1),
+      ASC_CHAIN("GET RTD LOOP", "NEXT", "DISCONNECT FROM SERVER", asc_mdl_rtd, asc_rtd_cb, NULL, NULL, 1),
       ASC_CHAIN_EXEC("CREATE WIALON DATA", "NEXT", "DISCONNECT FROM SERVER", asc_server_data_wialon_packet),
       ASC_CHAIN("SEND WIALON DATA", "NEXT", "DISCONNECT FROM SERVER", asc_mdl_gprs_socket_send_recieve, NULL, &asc_server_data, NULL, 3),
       ASC_CHAIN_DELAY(1000),
@@ -179,7 +179,11 @@ void main(void)
     if(asc_chain_is_running(chain))
     {
       asc_chain_run(chain);
-      if(!asc_chain_is_running(chain)) asc_chain_destroy(chain); //chain was done and stop, destroy it
+      if(!asc_chain_is_running(chain))
+      {
+        asc_chain_destroy(chain); //chain was done and stopped
+        chain = NULL;
+      }
     }
   }
 }

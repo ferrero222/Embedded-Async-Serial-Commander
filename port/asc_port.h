@@ -20,6 +20,13 @@
 #include "dbc_assert.h"
 #include "asc_core.h"
 
+#ifndef ASC_PORT_ENTER_CRITICAL
+  #define ASC_PORT_ENTER_CRITICAL() ((void)0)
+#endif
+#ifndef ASC_PORT_EXIT_CRITICAL
+  #define ASC_PORT_EXIT_CRITICAL() ((void)0)
+#endif
+
 /*******************************************************************************
  * Global pre-processor symbols/macros ('#define')
  ******************************************************************************/
@@ -49,14 +56,14 @@
 DBC_NORETURN void DBC_fault_handler(char const* module, int label); 
 
 /*******************************************************************************
- ** @brief  Weak function to enter into critical section
+ ** @brief  Platform hook to enter into a critical section
  ** @param  none
  ** @return none
  ******************************************************************************/
 void _asc_crit_enter(void); 
 
 /*******************************************************************************
- ** @brief  Weak function to exit critical section
+ ** @brief  Platform hook to exit from a critical section
  ** @param  none
  ** @return none
  ******************************************************************************/

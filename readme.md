@@ -1,4 +1,4 @@
-[English](README.md) | [Russian](README.ru.md)
+[English](readme.md) | [Russian](readme.ru.md)
 
 # eASC(Embedded Async Serial Commander) documentation
 
@@ -12,7 +12,7 @@ The framework offers a constructor and methods for easily creating any single or
 *   **Flexibility**: Ability to create any type of command with various parameter combinations.
 *   **Memory**: Use of a custom dynamic memory allocator with alignment support and O1heap fragmentation protection. [GitHub](https://github.com/pavel-kirienko/o1heap)
 *   **Error Handling**: Design by Contract (DBC) for robust error checking. [GitHub](https://github.com/QuantumLeaps/DBC-for-embedded-C)
-*   **Thread Safety**: Critical section protection for multithreaded applications.
+*   **Concurrency hooks**: Configurable critical sections for short shared-state operations; defaults are single-thread only.
 *   **URC Support**: URC handling for asynchronous events.
 *   **Testing**: Embedded tests from QLP. [GitHub](https://github.com/QuantumLeaps/Embedded-Test)
 *   **Slices**: Use of ring slices instead of direct buffer copying. [GitHub](https://github.com/ferrero222/ringslice/tree/dev)
@@ -20,22 +20,23 @@ The framework offers a constructor and methods for easily creating any single or
 *   **Extensibility**: Ability to adapt and integrate new parsers to support any command format.
 *   **Context Awareness**: Ability to create multiple library contexts simultaneously for parallel work with several devices.
 
-Tested with: SIM868....
+The host test suite exercises the parser, queue, modem modules, and chains. Hardware behavior still needs validation against the exact modem model and firmware used by an application.
 
 ## 2. Configuration and Prerequisites
 
 ### Basic Configuration
 
-You need to define your own ring buffer and pointers:
+Allocate the backing bytes and initialize the library's ring-buffer descriptor. Keep the context zero-initialized before its first initialization:
 
 ```c
-typedef struct {
-  uint8_t *buffer;
-  uint16_t size;
-  uint16_t head;
-  uint16_t tail;
-  uint16_t count;
-} asc_ring_buffer_t;
+uint8_t rx_bytes[512];
+asc_ring_buffer_t rx = {
+  .buffer = rx_bytes,
+  .size = sizeof(rx_bytes),
+  .head = 0,
+  .tail = 0,
+  .count = 0,
+};
 ```
 Next, define the context globally:
 
@@ -46,38 +47,19 @@ asc_context_t ctx = {0};
 Initialize this context:
 
 ```c
-asc_init(
-    &ctx,                     // Context
-    your_printf_function,     // User printf for debugging
-    your_write_function,      // Write function for the interface
-    your_ring_buffer_struct,  // Ring buffer structure
-);
+if (!asc_init_ex(&ctx, your_printf_function, your_write_function, &rx)) {
+  /* Invalid callbacks, ring-buffer state, or context state. */
+}
 ```
 
 ### Configuration Parameters
 
-In the file `asc_port.c`, you need to describe the critical section handlers for parallel access protection, as well as an exception handler:
+The default critical-section hooks are no-ops and are suitable only when one serialized application context owns the library. If the UART receive path or another execution context shares the ring/queue state, define a project port header and provide short, nestable hooks:
 
 ```c
-DBC_NORETURN void DBC_fault_handler(char const* module, int label)
-{
-  (void)module;
-  (void)label;
-  while (1)
-  {
-    /* Typically you would trigger a system reset or safe state here */
-  }
-}
-
-static void asc_crit_enter(void)
-{
-  __disable_irq();
-}
-
-static void asc_crit_exit(void)
-{
-  __enable_irq();
-}
+/* my_asc_port_config.h */
+#define ASC_PORT_ENTER_CRITICAL() platform_irq_lock()
+#define ASC_PORT_EXIT_CRITICAL()  platform_irq_unlock()
 ```
 
 In the file `asc_core.h`, you can configure parameters:
@@ -89,15 +71,14 @@ In the file `asc_core.h`, you can configure parameters:
 #define ASC_MEMORY_POOL_SIZE      4096   //Memory pool for custom heap
 #define ASC_URC_FREQ_CHECK        10     //Check urc each ASC_URC_FREQ_CHECK*10ms
 
-#ifndef ASC_TEST
-  #define ASC_DEBUG_ENABLED       1      //Recommend to turn on DEBUG logs
-#endif
+/* These macros can be overridden by the application before including the header. */
+#define ASC_DEBUG_ENABLED         0
 ```
 
 The main processing function must be called for each context every 10ms in the system timer:
 
 ```c
-void timer_10ms_handler(void) {
+void task_10ms(void) {
   asc_core_proc(&ctx1);
   asc_core_proc(&ctx2);
   ...
@@ -172,12 +153,12 @@ Let's examine each specified command parameter individually and understand what 
 *   **[PREFIX]** - String literal to search for in the response. Can be omitted.
 *   **[PARCE_TYPE]** - Type of parser used, read below.
 *   **[FORMAT]** - Response parsing format for SSCANF, used together with `VA_ARGS`. Retrieved data will be assembled according to this format, placed into arguments, and passed to the group callback. Can be omitted.
-*   **[RPT]** - Number of repetitions in case of an error.
+*   **[RPT]** - Maximum command attempts, including the first send; zero fails on the first timeout.
 *   **[WAIT]** - Response wait timer in 10ms units.
 *   **[STEPERROR]** - In case of a command error, we can skip several steps forward or backward within the group, or do nothing. 0 terminates the entire group.
 *   **[STEPOK]** - Similar to error, but here in case of success we can step to a specific command. 0 terminates the entire group.
 *   **[CB]** - Callback for the command, called upon command execution result. Data obtained via the format is also passed to it. Can be omitted.
-*   **[VA_ARG]** - Arguments for the format in the form of `ASC_ARG`, where we specify which structure and which field will be used to store the formatted data. Can be omitted. Maximum 6.
+*   **[VA_ARG]** - Arguments for the format in the form of `ASC_ARG`, where we specify which structure and which field will be used to store the formatted data. Can be omitted. Maximum 6. The caller must match each format conversion to the field type and keep string widths within the field size; the core checks only that the field offset lies inside the allocated data block.
 
 ### Parameters of the asc_entity_enqueue function
 
@@ -222,7 +203,7 @@ void (*asc_entity_cb_t)(bool result, void* meta, void* data);
     *   Use `&` for AND operations: `"+IPD&SEND OK"`
 *   Also, in the [PREFIX] field, you can specify the macro-literal `ASC_CMD_FORCE`, which indicates that this command or data should simply be sent without parsing or waiting for a response. Other fields except [STEPOK] will not be used at all, and their content can be anything.
 *   The `modules` folder contains some files and implementations of ready-made AT command groups.
-*   The `tests` folder contains a makefile that runs host tests to check logic independently of the microcontroller.
+*   The `tests` folder contains a portable makefile. Run `make -C tests check`; use `ARCH_FLAGS=-m32` only when the toolchain has 32-bit support. Host tests use an 8 KiB pool to account for 64-bit pointer overhead; production builds keep the configurable default and must size it for their actual queue workload. `BIN_DIR` can redirect all build outputs outside the source tree.
 *   The command callback receives a data slice. This is done so you can write your own data parser if the standard formatting is insufficient. An example of this can be seen in the ready-made function `asc_mdl_rtd`, where the data structure is dynamically created by the library, and in the command callback, we manually parse its data in the desired way and place them into this structure.
 *   In case of processed data, the library itself moves the tail and counter of your ring buffer.
 *   The `examples` folder contains usage examples.
@@ -249,6 +230,7 @@ Parser for data transmission format commands. Parses raw data simply checking fo
 Based on command groups (described above), you can create your own algorithms and execution chains. An API is provided in the file `asc_chain.h`:
 
 *   `asc_chain_destroy`
+*   `asc_chain_destroy_ex`
 *   `asc_chain_start`
 *   `asc_chain_stop`
 *   `asc_chain_reset`
@@ -259,10 +241,11 @@ Based on command groups (described above), you can create your own algorithms an
 
 ### Creating Step Functions
 
-To create a chain, each command group must be wrapped in a function of the standard type:
+To create a chain, each command group must be wrapped in a function of this type:
 
 ```c
-bool (*function)(asc_entity_cb_t cb, void* param, void* ctx);
+bool (*function)(asc_context_t* ctx, asc_entity_cb_t cb,
+                 const void* param, void* meta);
 ```
 The function must, based on the result, execute the callback passed into it.
 
@@ -271,10 +254,11 @@ For example:
 ```c
 bool asc_mdl_gprs_socket_connect(asc_context_t* const ctx, const asc_entity_cb_t cb, const void* const param, void* const meta)
 {
-  DBC_REQUIRE(101, param);
-  char cipstart[128] = {0};
-  asc_mdl_tcp_server_t* tcp = (asc_mdl_tcp_server_t*)param;
-  snprintf(cipstart, sizeof(cipstart), "%sAT+CIPSTART=\"%s\",\"%s\",\"%s\"%s", ASC_CMD_SAVE, tcp->mode, tcp->ip, tcp->port, ASC_CMD_CRLF);
+  if(!ctx || !param) return false;
+  char cipstart[320] = {0};
+  const asc_mdl_gprs_server_t* tcp = (const asc_mdl_gprs_server_t*)param;
+  int written = snprintf(cipstart, sizeof(cipstart), "%sAT+CIPSTART=\"%s\",\"%s\",\"%s\"%s", ASC_CMD_SAVE, tcp->mode, tcp->ip, tcp->port, ASC_CMD_CRLF);
+  if(written < 0 || (size_t)written >= sizeof(cipstart)) return false;
   asc_item_t items[] = //[REQ][PREFIX][PARCE_TYPE][RPT][WAIT][STEPERROR][STEPOK][CB][FORMAT][...##VA_ARGS]
   {
     ASC_ITEM("AT+CIPSTATUS"ASC_CMD_CRLF, "STATE: IP STATUS|STATE: TCP CLOSED", ASC_PARCE_SIMCOM, 10, 100,  0, 1, NULL, NULL, ASC_NO_ARG),
@@ -334,12 +318,16 @@ chain_step_t tcp_steps[] =
 };
 
 asc_chain_t* chain = asc_chain_create("TCP", tcp_steps, sizeof(tcp_steps)/sizeof(chain_step_t), ctx);
-asc_chain_start(chain);
+if(!chain || !asc_chain_start(chain)) return;
 
 while(asc_chain_is_running(chain))
 {
   bool res = asc_chain_run(chain);
-  if(asc_chain_is_running(chain)) asc_chain_destroy(chain);
+  if(asc_chain_is_running(chain) && !res) break;
+}
+/* Destroy only after any outstanding asynchronous step callback has returned. */
+if(!asc_chain_destroy_ex(chain)) {
+  /* Defer cleanup until no run/callback is active. */
 }
 ```
 
@@ -357,7 +345,7 @@ So, let's look at what can be used in a chain and what parameters can be passed 
 *   **[Cb]** - Callback for the step.
 *   **[Param]** - The parameters that will be passed to the specified function when it starts executing.
 *   **[meta]** - The metadata that we passed during creation.
-*   **[Retries]** - Number of retries in case of error.
+*   **[Retries]** - Maximum total attempts, including the initial call; 0 or 1 means one attempt.
 
 **ASC_CHAIN_EXEC** - Macro for creating and executing some action, you can execute or check something. Contains:
 *   **[Name]** - Step name.
@@ -376,7 +364,8 @@ So, let's look at what can be used in a chain and what parameters can be passed 
 ### Parameters of the asc_entity_enqueue function
 
 ```c
-asc_chain_t* asc_chain_create(const char* const name, const chain_step_t* const steps, const uint32_t step_count);
+asc_chain_t* asc_chain_create(const char* const name, const chain_step_t* const steps,
+                              const uint32_t step_count, asc_context_t* const ctx);
 ```
 
 *   **name** - Chain name.

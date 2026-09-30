@@ -6,8 +6,8 @@
  *                   ====== /_/   \_\____/ \____| ======                      *  
  *                                                                            *
  ******************************************************************************/
-#ifndef __ASC_MDL_TCP_H
-#define __ASC_MDL_TCP_H
+#ifndef __ASC_MDL_GPRS_H
+#define __ASC_MDL_GPRS_H
 
 /*******************************************************************************
  * Include files
@@ -27,16 +27,16 @@
 /*******************************************************************************
  * Local types definitions
  ******************************************************************************/
-typedef struct asc_mdl_tcp_server_t {
+typedef struct asc_mdl_gprs_server_t {
   char mode[4]; 
   char ip[256]; 
   char port[6]; 
-} asc_mdl_tcp_server_t;
+} asc_mdl_gprs_server_t;
 
-typedef struct asc_mdl_tcp_data_t {
+typedef struct asc_mdl_gprs_data_t {
   char* data; 
   char* answ;
-} asc_mdl_tcp_data_t;
+} asc_mdl_gprs_data_t;
 
 /*******************************************************************************
  * Local variable definitions ('static')
@@ -71,7 +71,7 @@ bool asc_mdl_gprs_socket_config(asc_context_t* const ctx, const asc_entity_cb_t 
  ** @brief  Function to connect socket.
  ** @param  ctx    core context
  ** @param  cb     cb when proc will be done. Can be NULL
- ** @param  param  input param if function is required them. Here is @asc_mdl_tcp_server_t
+ ** @param  param  input param if function is required them. Here is @asc_mdl_gprs_server_t
  **                Should exist only when this function is executing
  ** @param  meta   Meta data of function execution. Will be passe to the cb by the
  **                end of execution. Can be NULL
@@ -83,7 +83,7 @@ bool asc_mdl_gprs_socket_connect(asc_context_t* const ctx, const asc_entity_cb_t
  ** @brief  Function to connect socket.
  ** @param  ctx    core context
  ** @param  cb     cb when proc will be done. Can be NULL
- ** @param  param  input param if function is required them. Here is @asc_mdl_tcp_server_t
+ ** @param  param  input param if function is required them. Here is @asc_mdl_gprs_server_t
  **                Should exist only when this function is executing
  ** @param  meta   Meta data of function execution. Will be passe to the cb by the
  **                end of execution. Can be NULL

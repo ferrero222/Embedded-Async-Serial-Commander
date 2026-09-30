@@ -113,10 +113,11 @@ static void asc_mdl_general_ceng_cb(ringslice_t rs_data, bool result, void* cons
   if(ringslice_is_empty(&rs_data)) return;
   bool header_skip = false;
   asc_mdl_rtd_t* rtd = (asc_mdl_rtd_t*)data;
-  while(ringslice_scanf(&rs_data, "+CENG: %d,\"%d,%d,%x,%x,", 
-                        &rtd->modem_lbs[rtd->lbs_cnt].cell, &rtd->modem_lbs[rtd->lbs_cnt].mcc,
-                        &rtd->modem_lbs[rtd->lbs_cnt].mnc, &rtd->modem_lbs[rtd->lbs_cnt].lac,
-                        &rtd->modem_lbs[rtd->lbs_cnt].cell_id))
+  while(ringslice_scanf(
+    &rs_data, "+CENG: %d,\"%d,%d,%x,%x,", 
+    &rtd->modem_lbs[rtd->lbs_cnt].cell, &rtd->modem_lbs[rtd->lbs_cnt].mcc,
+    &rtd->modem_lbs[rtd->lbs_cnt].mnc, &rtd->modem_lbs[rtd->lbs_cnt].lac,
+    &rtd->modem_lbs[rtd->lbs_cnt].cell_id))
   {
     if(header_skip && rtd->modem_lbs[rtd->lbs_cnt].cell_id != 0 && rtd->modem_lbs[rtd->lbs_cnt].lac != 0) ++rtd->lbs_cnt;
     if(rtd->lbs_cnt >= 7) break;

@@ -6,8 +6,8 @@
  *                   ====== /_/   \_\____/ \____| ======                      *  
  *                                                                            *
  ******************************************************************************/
-#ifndef __ASC_MDL_TCP_SERVER_H
-#define __ASC_MDL_TCP_SERVER_H
+#ifndef __ASC_MDL_GPRS_SERVER_H
+#define __ASC_MDL_GPRS_SERVER_H
 
 /*******************************************************************************
  * Include files
@@ -28,10 +28,13 @@ typedef struct {
   uint8_t* buffer;           // Accumulation buffer
   uint16_t buffer_size;      // Total buffer size
   uint16_t data_len;         // Current data length in buffer
-  int16_t expected_len;      // Expected payload length (-1 if unknown)
+  uint16_t expected_len;     // Expected payload length while packet_in_progress
   uint16_t header_len;       // Parsed header length
   bool packet_in_progress;   // Packet parsing in progress flag
-} asc_tcp_stream_ctx_t;
+  bool callback_in_progress; // Prevents reentrant mutation during packet callback
+} asc_gprs_stream_ctx_t;
+
+#define ASC_GPRS_STREAM_CTX_INITIALIZER {0}
 
 /*******************************************************************************
  * Local function prototypes ('static')
@@ -46,27 +49,28 @@ typedef struct {
  * Function implementation - global ('extern') and local ('static')
  ******************************************************************************/
 /*******************************************************************************
- ** @brief  Initialize TCP stream context
- ** @param  ctx          Pointer to context
- ** @param  packet_size  Max packet size
+ ** @brief  Initialize GPRS stream context
+ ** @param  asc_ctx      Initialized ASC context
+ ** @param  stream_ctx   Zero-initialized with ASC_GPRS_STREAM_CTX_INITIALIZER
+ ** @param  packet_size  Total accumulation-buffer capacity
  ** @return true if success, false otherwise
  ******************************************************************************/
-bool asc_tcp_stream_ctx_init(asc_context_t* const asc_ctx,  asc_tcp_stream_ctx_t* stream_ctx, uint16_t packet_size);
+bool asc_gprs_stream_ctx_init(asc_context_t* const asc_ctx,  asc_gprs_stream_ctx_t* stream_ctx, uint16_t packet_size);
 
 /*******************************************************************************
- ** @brief  Cleanup TCP stream context
+ ** @brief  Cleanup GPRS stream context
  ** @param  ctx          Pointer to context
  ******************************************************************************/
-void asc_tcp_stream_ctx_cleanup(asc_context_t* const asc_ctx, asc_tcp_stream_ctx_t* stream_ctx);
+void asc_gprs_stream_ctx_cleanup(asc_context_t* const asc_ctx, asc_gprs_stream_ctx_t* stream_ctx);
 
 /*******************************************************************************
- ** @brief  Handle TCP stream data
+ ** @brief  Handle GPRS stream data
  ** @param  ctx          Stream context (per connection)
  ** @param  data         Pointer to incoming data
  ** @param  len          Data length
  ** @param  cb           Callback when full packet found
  ** @return true if data processed successfully
  ******************************************************************************/
-bool asc_mld_tcp_server_stream_data_handler(asc_context_t* const asc_ctx,  asc_tcp_stream_ctx_t* stream_ctx, uint8_t* data, uint16_t len, asc_stream_data_cb cb);
+bool asc_mld_gprs_server_stream_data_handler(asc_context_t* const asc_ctx,  asc_gprs_stream_ctx_t* stream_ctx, uint8_t* data, uint16_t len, asc_stream_data_cb cb);
 
- #endif //__ASC_MDL_TCP_SERVER_H 
+ #endif //__ASC_MDL_GPRS_SERVER_H

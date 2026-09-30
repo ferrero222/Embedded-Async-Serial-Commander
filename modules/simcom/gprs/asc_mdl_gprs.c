@@ -10,14 +10,11 @@
  * Include files
  ******************************************************************************/
 #include "asc_core.h"
-#include "asc_mdl_tcp.h"
-#include "dbc_assert.h"
+#include "asc_mdl_gprs.h"
 #include <stdio.h>
-
-/*******************************************************************************
- * Local pre-processor symbols/macros ('#define')
- ******************************************************************************/
-DBC_MODULE_NAME("ASC_MDL_TCP")
+#include <string.h>
+#include <stdint.h>
+#include <limits.h>
 
 /*******************************************************************************
  * Global variable definitions (declared in header file with 'extern')
@@ -34,6 +31,23 @@ DBC_MODULE_NAME("ASC_MDL_TCP")
 /*******************************************************************************
  * Function implementation - global ('extern') and local ('static')
  ******************************************************************************/
+/*******************************************************************************
+** @brief Calculates the length of a GPRS field and checks if it fits within capacity
+** @param value Pointer to the null-terminated string to be checked
+** @param capacity Maximum size of the buffer holding the string
+** @param length Pointer to store the calculated length of the string
+** @return true - string is null-terminated within capacity, false - otherwise
+******************************************************************************/
+static bool asc_mdl_gprs_field_length(const char* const value, const size_t capacity, size_t* const length)
+{
+  if(!value || !length) return false;
+  const char* terminator = (const char*)memchr(value, '\0', capacity);
+  if(!terminator) return false;
+  *length = (size_t)(terminator - value);
+  return true;
+}
+
+
 /*******************************************************************************
  ** @brief  Function init GPRS
  ** @param  ctx    core context
@@ -96,7 +110,7 @@ bool asc_mdl_gprs_socket_config(asc_context_t* const ctx, const asc_entity_cb_t 
  ** @brief  Function to connect socket.
  ** @param  ctx    core context
  ** @param  cb     cb when proc will be done. Can be NULL
- ** @param  param  input param if function is required them. Here is @asc_mdl_tcp_server_t
+ ** @param  param  input param if function is required them. Here is @asc_mdl_gprs_server_t
  **                Should exist only when this function is executing
  ** @param  ctx    Context of function execution. Will be passe to the cb by the
  **                end of execution. Can be NULL
@@ -104,10 +118,18 @@ bool asc_mdl_gprs_socket_config(asc_context_t* const ctx, const asc_entity_cb_t 
  ******************************************************************************/
 bool asc_mdl_gprs_socket_connect(asc_context_t* const ctx, const asc_entity_cb_t cb, const void* const param, void* const meta)
 {
-  DBC_REQUIRE(101, param);
-  char cipstart[128] = {0}; 
-  asc_mdl_tcp_server_t* tcp = (asc_mdl_tcp_server_t*)param;
-  snprintf(cipstart, sizeof(cipstart), "%sAT+CIPSTART=\"%s\",\"%s\",\"%s\"%s", ASC_CMD_SAVE, tcp->mode, tcp->ip, tcp->port, ASC_CMD_CRLF); 
+  if(!ctx || !asc_get_init(ctx).init || !param) return false;
+  const asc_mdl_gprs_server_t* tcp = (const asc_mdl_gprs_server_t*)param;
+  size_t length = 0;
+  if(!asc_mdl_gprs_field_length(tcp->mode, sizeof(tcp->mode), &length) || !length ||
+     !asc_mdl_gprs_field_length(tcp->ip, sizeof(tcp->ip), &length)     || !length ||
+     !asc_mdl_gprs_field_length(tcp->port, sizeof(tcp->port), &length) || !length
+  ) {
+    return false;
+  }
+  char cipstart[sizeof(ASC_CMD_SAVE) + sizeof("AT+CIPSTART=\"\",\"\",\"\"\r\n") - 1u + sizeof(tcp->mode) + sizeof(tcp->ip) + sizeof(tcp->port) - 3u] = {0};
+  int written = snprintf(cipstart, sizeof(cipstart), "%sAT+CIPSTART=\"%s\",\"%s\",\"%s\"%s",  ASC_CMD_SAVE, tcp->mode, tcp->ip, tcp->port, ASC_CMD_CRLF);
+  if(written < 0 || (size_t)written >= sizeof(cipstart)) return false;
   asc_item_t items[] = //[REQ][PREFIX][PARCE_TYPE][RPT][WAIT][STEPERROR][STEPOK][CB][FORMAT][...##VA_ARGS]
   { 
     ASC_ITEM("AT+CIPSTATUS"ASC_CMD_CRLF, "STATE: IP STATUS|STATE: TCP CLOSED", ASC_PARCE_SIMCOM, 10, 100,  0, 1, NULL, NULL, ASC_NO_ARG),
@@ -133,28 +155,56 @@ bool asc_mdl_gprs_socket_connect(asc_context_t* const ctx, const asc_entity_cb_t
  ******************************************************************************/
 bool asc_mdl_gprs_socket_send_recieve(asc_context_t* const ctx, const asc_entity_cb_t cb, const void* const param, void* const meta)
 {
-  DBC_REQUIRE(201, param);
-  DBC_REQUIRE(202, asc_get_init(ctx).init);
-  bool res = false;
-  asc_mdl_tcp_data_t* tcp = (asc_mdl_tcp_data_t*)param;
-  size_t size = strlen(ASC_CMD_SAVE) + strlen(tcp->data) + strlen(ASC_CMD_CTRL_Z) +1; 
-  char cipsend[32] = {0}; 
+  if(!ctx || !asc_get_init(ctx).init || !param) return false;
+  const asc_mdl_gprs_data_t* tcp = (const asc_mdl_gprs_data_t*)param;
+  if(!tcp->data) return false;
+  const size_t marker_len = strlen(ASC_CMD_SAVE);
+  const size_t ctrl_z_len = strlen(ASC_CMD_CTRL_Z);
+  size_t data_len = 0;
+  if(!asc_mdl_gprs_field_length(tcp->data, UINT16_MAX - marker_len - ctrl_z_len + 1u, &data_len)) return false;
+  size_t size = marker_len + data_len + ctrl_z_len + 1u;
+  char cipsend[48] = {0};
   char* datacmd = (char*)asc_malloc(ctx, size);
-  if(!datacmd) 
-  { 
-    asc_deinit(ctx); 
-    return false; 
-  } 
-  snprintf(cipsend, sizeof(cipsend), "%sAT+CIPSEND=%d%s", ASC_CMD_SAVE, (int)(size - strlen(ASC_CMD_SAVE) -1), ASC_CMD_CRLF); 
-  snprintf(datacmd, size, "%s%s%s", ASC_CMD_SAVE, tcp->data, ASC_CMD_CTRL_Z); 
+  if(!datacmd) return false;
+  size_t answer_len = 0;
+  char* answer_prefix = NULL;
+  if(tcp->answ && !asc_mdl_gprs_field_length(tcp->answ, UINT16_MAX - marker_len + 1u, &answer_len))
+  {
+    asc_free(ctx, datacmd);
+    return false;
+  }
+  if(answer_len)
+  {
+    answer_prefix = (char*)asc_malloc(ctx, marker_len + answer_len + 1u);
+    if(!answer_prefix) 
+    {
+      asc_free(ctx, datacmd);
+      return false;
+    }
+    memcpy(answer_prefix, ASC_CMD_SAVE, marker_len);
+    memcpy(answer_prefix + marker_len, tcp->answ, answer_len + 1u);
+  }
+  int written = snprintf(cipsend, sizeof(cipsend), "%sAT+CIPSEND=%zu%s", ASC_CMD_SAVE, data_len + ctrl_z_len, ASC_CMD_CRLF);
+  if(written < 0 || (size_t)written >= sizeof(cipsend)) 
+  {
+    asc_free(ctx, answer_prefix);
+    asc_free(ctx, datacmd);
+    return false;
+  }
+  written = snprintf(datacmd, size, "%s%s%s", ASC_CMD_SAVE, tcp->data, ASC_CMD_CTRL_Z);
+  if(written < 0 || (size_t)written >= size) {
+    asc_free(ctx, answer_prefix);
+    asc_free(ctx, datacmd);
+    return false;
+  }
   asc_item_t items[] = //[REQ][PREFIX][PARCE_TYPE][RPT][WAIT][STEPERROR][STEPOK][CB][FORMAT][...##VA_ARGS]
   {
     ASC_ITEM("AT+CIPSTATUS"ASC_CMD_CRLF, "STATE: CONNECT OK",  ASC_PARCE_SIMCOM, 5, 100,  0, 1, NULL, NULL, ASC_NO_ARG),
     ASC_ITEM(cipsend,                        "AT+CIPSEND=&>",     ASC_PARCE_RAW, 3, 500,  0, 1, NULL, NULL, ASC_NO_ARG),
-    ASC_ITEM(datacmd,                              tcp->answ,     ASC_PARCE_RAW, 3, 500,  0, 1, NULL, NULL, ASC_NO_ARG),
+    ASC_ITEM(datacmd,                          answer_prefix,     ASC_PARCE_RAW, 3, 500,  0, 1, NULL, NULL, ASC_NO_ARG),
   };
-  if(!asc_entity_enqueue(ctx, items, sizeof(items)/sizeof(items[0]), cb, 0, meta)) res = false;
-  else res = true;
+  bool res = asc_entity_enqueue(ctx, items, sizeof(items)/sizeof(items[0]), cb, 0, meta);
+  if(answer_prefix) asc_free(ctx, answer_prefix);
   asc_free(ctx, datacmd);
   return res;
 }

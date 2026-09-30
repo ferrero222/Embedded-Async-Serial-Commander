@@ -26,21 +26,21 @@
  * @param success_target Target step name on success (NULL for next step)
  * @param error_target Target step name on error
  * @param func Function to execute
- * @param retries Maximum retry attempts
+ * @param retries Maximum total attempts, including the initial call (0 means one attempt)
  */
 #define ASC_CHAIN(name_, success_target_, error_target_, func_, cb_, param_, meta_, retries_) \
-{ \
-  .type = ASC_CHAIN_STEP_FUNCTION, \
-  .name = name_, \
-  .action.func.function = func_, \
-  .action.func.cb = cb_, \
-  .action.func.param = param_, \
-  .action.func.meta = meta_, \
-  .action.func.success_target = success_target_, \
-  .action.func.error_target = error_target_, \
-  .action.func.max_retries = retries_, \
-  .state = ASC_CHAIN_STEP_IDLE, \
-  .execution_count = 0, \
+{                                                                                             \
+  .type = ASC_CHAIN_STEP_FUNCTION,                                                            \
+  .name = name_,                                                                              \
+  .action.func.function = func_,                                                              \
+  .action.func.cb = cb_,                                                                      \
+  .action.func.param = param_,                                                                \
+  .action.func.meta = meta_,                                                                  \
+  .action.func.success_target = success_target_,                                              \
+  .action.func.error_target = error_target_,                                                  \
+  .action.func.max_retries = retries_,                                                        \
+  .state = ASC_CHAIN_STEP_IDLE,                                                               \
+  .execution_count = 0,                                                                       \
 }
 
 /**
@@ -51,14 +51,14 @@
  * @param exec_func exec function
  */
 #define ASC_CHAIN_EXEC(name_, true_target_, false_target_, exec_func_) \
-{ \
-  .type = ASC_CHAIN_STEP_EXEC, \
-  .name = name_, \
-  .action.exec.function = exec_func_, \
-  .action.exec.true_target = true_target_, \
-  .action.exec.false_target = false_target_, \
-  .state = ASC_CHAIN_STEP_IDLE, \
-  .execution_count = 0, \
+{                                                                      \
+  .type = ASC_CHAIN_STEP_EXEC,                                         \
+  .name = name_,                                                       \
+  .action.exec.function = exec_func_,                                  \
+  .action.exec.true_target = true_target_,                             \
+  .action.exec.false_target = false_target_,                           \
+  .state = ASC_CHAIN_STEP_IDLE,                                        \
+  .execution_count = 0,                                                \
 }
 
 /**
@@ -66,38 +66,38 @@
  * @param iterations Number of iterations (0 = infinite loop)
  */
 #define ASC_CHAIN_LOOP_START(iterations_) \
-{ \
-  .type = ASC_CHAIN_STEP_LOOP_START, \
-  .name = "LOOP_START", \
-  .action.loop_count = iterations_, \
-  .state = ASC_CHAIN_STEP_IDLE, \
-  .execution_count = 0, \
+{                                         \
+  .type = ASC_CHAIN_STEP_LOOP_START,      \
+  .name = "LOOP_START",                   \
+  .action.loop_count = iterations_,       \
+  .state = ASC_CHAIN_STEP_IDLE,           \
+  .execution_count = 0,                   \
 }
 
 /**
  * @brief Create loop end step
  */
-#define ASC_CHAIN_LOOP_END \
-{ \
+#define ASC_CHAIN_LOOP_END         \
+{                                  \
   .type = ASC_CHAIN_STEP_LOOP_END, \
-  .name = "LOOP_END", \
-  .action.loop_count = 0, \
-  .state = ASC_CHAIN_STEP_IDLE, \
-  .execution_count = 0, \
+  .name = "LOOP_END",              \
+  .action.loop_count = 0,          \
+  .state = ASC_CHAIN_STEP_IDLE,    \
+  .execution_count = 0,            \
 }
 
 /**
  * @brief Create delay step
  * @param ms Delay in milliseconds
  */
-#define ASC_CHAIN_DELAY(ms_) \
-{ \
+#define ASC_CHAIN_DELAY(ms_)    \
+{                               \
   .type = ASC_CHAIN_STEP_DELAY, \
-  .name = "DELAY", \
-  .action.delay.start = 0, \
-  .action.delay.value = ms_, \
+  .name = "DELAY",              \
+  .action.delay.start = 0,      \
+  .action.delay.value = ms_,    \
   .state = ASC_CHAIN_STEP_IDLE, \
-  .execution_count = 0, \
+  .execution_count = 0,         \
 }
 
 /*******************************************************************************
@@ -135,7 +135,7 @@ typedef struct {
       void* meta;                  // meta for function executing
       const char *success_target;  // Target step on success
       const char *error_target;    // Target step on error
-      uint8_t max_retries;         // Maximum retry attempts
+      uint8_t max_retries;         // Maximum total attempts, including the initial call (0 means one)
     } func;   
     struct {   
       bool (*function)(void);      // exec function
@@ -145,6 +145,7 @@ typedef struct {
     struct {   
       uint32_t start;              // Start moment
       uint32_t value;              // Delay in milliseconds
+      bool started;                // Distinguishes a start time of zero from idle
     } delay;    
     uint8_t loop_count;            // Loop iterations (0 = infinite)
   } action;      
@@ -158,12 +159,16 @@ typedef struct asc_chain_t {
   const char *name;                   // Chain name
   chain_step_t *steps;                // Array of steps 
   uint32_t loop_stack_ptr;            // Loop stack pointer
-  uint8_t step_count;                 // Number of steps
-  uint8_t current_step;               // Current step index
-  uint16_t loop_stack_size;           // Maximum loop stack size
+  uint32_t step_count;                // Number of steps
+  uint32_t current_step;              // Current step index
+  uint32_t loop_stack_size;           // Maximum loop stack size
   asc_loop_stack_item_t* loop_stack;  // Loop stack for nested loops
   asc_context_t* ctx;                 // Core context
   bool is_running;                    // Chain execution flag
+  uint32_t pending_step;              // Step index awaiting its single async callback
+  bool callback_pending;              // Prevents reset/restart/destroy while callback is outstanding
+  bool function_active;               // Protects synchronous function invocation
+  bool run_active;                    // Prevents reentrant chain_run/destroy
 } asc_chain_t;
 
 /*******************************************************************************
@@ -177,6 +182,8 @@ typedef struct asc_chain_t {
  ******************************************************************************/
 /*******************************************************************************
  ** @brief Create a new chain with copied steps (heap allocated)
+ ** @note Step function pointers, names, transition strings, and param/meta pointers
+ **       remain borrowed and must outlive the chain.
  ** @param name       Chain name
  ** @param steps      Array of steps (will be copied)
  ** @param step_count Number of steps
@@ -191,6 +198,7 @@ asc_chain_t* asc_chain_create(const char* const name, const chain_step_t* const 
  ** @retval none
  *******************************************************************************/
 void asc_chain_destroy(asc_chain_t* const chain);
+bool asc_chain_destroy_ex(asc_chain_t* const chain);
 
 /*******************************************************************************
  ** @brief Start chain execution

@@ -42,8 +42,12 @@ static asc_urc_queue_t test_urc_sms = {"+CMTI:", asc_sms_urc_cb};
 static void asc_sms_urc_cb(const ringslice_t urc_slice)
 {
   asc_mdl_sms_msg_t sms = {0};
-  ringslice_scanf(&urc_slice, "+CMTI:%*[^,],%d\x0d", &sms.index);
-  if(0 != sms.index) asc_mdl_sms_read(&simcom_ctx, asc_sms_read_cb, &sms, NULL);
+  int index = 0;
+  if(ringslice_scanf(&urc_slice, "+CMTI:%*[^,],%d\x0d", &index) == 1 && index > 0 && index <= UINT16_MAX)
+  {
+    sms.index = (uint16_t)index;
+    asc_mdl_sms_read(&simcom_ctx, asc_sms_read_cb, &sms, NULL);
+  }
 }
 
 /* Send echo sms */
