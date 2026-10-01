@@ -1,5 +1,5 @@
 /*******************************************************************************
- *                              ASC Example                         26.11.2025 *
+ *                              TACT Example                         26.11.2025 *
  *                                 v1.0                                        *
  *       This example is showing how to catch incoming sms URC, get msg from   *
  *       it and send back as echo.                                             *
@@ -13,20 +13,20 @@
 #include "timers.h"
 #include "sim_proc.h"
 #include "hc32f460_utility.h"
-#include "asc_core.h"
-#include "asc_mdl_general.h"
-#include "asc_mdl_sms.h"
+#include "tact_core.h"
+#include "tact_mdl_general.h"
+#include "tact_mdl_sms.h"
 
 /*******************************************************************************
  * Local function prototypes ('static')
  ******************************************************************************/
-static void asc_sms_urc_cb(const ringslice_t urc_slice);
-static void asc_sms_read_cb(const bool result, void* const ctx, const void* const data);
+static void tact_sms_urc_cb(const ringslice_t urc_slice);
+static void tact_sms_read_cb(const bool result, void* const ctx, const void* const data);
 
 /*******************************************************************************
  * Local variable definitions ('static')
  ******************************************************************************/
-asc_context_t simcom_ctx = {0};
+tact_context_t simcom_ctx = {0};
 
 /*******************************************************************************
  * Function implementation - global ('extern') and local ('static')
@@ -36,26 +36,26 @@ asc_context_t simcom_ctx = {0};
  ** @param  None
  ** @return None
  ******************************************************************************/
-static asc_urc_queue_t test_urc_sms = {"+CMTI:", asc_sms_urc_cb};
+static tact_urc_queue_t test_urc_sms = {"+CMTI:", tact_sms_urc_cb};
 
 /* Get sms */
-static void asc_sms_urc_cb(const ringslice_t urc_slice)
+static void tact_sms_urc_cb(const ringslice_t urc_slice)
 {
-  asc_mdl_sms_msg_t sms = {0};
+  tact_mdl_sms_msg_t sms = {0};
   int index = 0;
   if(ringslice_scanf(&urc_slice, "+CMTI:%*[^,],%d\x0d", &index) == 1 && index > 0 && index <= UINT16_MAX)
   {
     sms.index = (uint16_t)index;
-    asc_mdl_sms_read(&simcom_ctx, asc_sms_read_cb, &sms, NULL);
+    tact_mdl_sms_read(&simcom_ctx, tact_sms_read_cb, &sms, NULL);
   }
 }
 
 /* Send echo sms */
-static void asc_sms_read_cb(const bool result, void* const ctx, const void* const data)
+static void tact_sms_read_cb(const bool result, void* const ctx, const void* const data)
 {
   if(!result) return;
-  asc_mdl_sms_msg_t* sms = (asc_mdl_sms_msg_t*)data;
-  asc_mdl_sms_send_text(&simcom_ctx, NULL, sms, NULL);
+  tact_mdl_sms_msg_t* sms = (tact_mdl_sms_msg_t*)data;
+  tact_mdl_sms_send_text(&simcom_ctx, NULL, sms, NULL);
 }
 
 /*******************************************************************************
@@ -65,13 +65,13 @@ static void asc_sms_read_cb(const bool result, void* const ctx, const void* cons
  ******************************************************************************/ 
 void main(void)
 {
-  asc_boot(); //init hardware, pins, uart, clock and etc.
-  asc_init(&simcom_ctx, my_printf, gsm_proc_send_data, (asc_ring_buffer_t*)&uart_gsm_ctx.rx_buf); //atl lib init
-  asc_mdl_modem_init(&simcom_ctx, NULL, NULL, NULL);
-  asc_urc_enqueue(&simcom_ctx, &test_urc_sms);
+  tact_boot(); //init hardware, pins, uart, clock and etc.
+  tact_init(&simcom_ctx, my_printf, gsm_proc_send_data, (tact_ring_buffer_t*)&uart_gsm_ctx.rx_buf); //tact lib init
+  tact_mdl_modem_init(&simcom_ctx, NULL, NULL, NULL);
+  tact_urc_enqueue(&simcom_ctx, &test_urc_sms);
   while(1)
   {
-    asc_timers_proc(); //proc programm timers (10ms included inside of it)
+    tact_timers_proc(); //proc programm timers (10ms included inside of it)
   }
 }
 

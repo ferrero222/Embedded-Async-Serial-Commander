@@ -37,7 +37,7 @@
 
 #-----------------------------------------------------------------------------
 # project name:
-PROJECT := simcom_asc
+PROJECT := simcom_tact
 ET_DIR  := ../libs/embedded-test/et
 
 # list of all source directories used by this project
@@ -74,17 +74,17 @@ INCLUDES := -I. \
 # C source files...
 C_SRCS := \
 	o1heap.c \
-	asc_chain.c \
-	asc_core.c \
-	asc_mdl_general.c \
-	asc_mdl_sms.c \
-	asc_mdl_gprs.c \
-	asc_mdl_gprs_server.c \
-	asc_mdl_mqtt.c \
+	tact_chain.c \
+	tact_core.c \
+	tact_mdl_general.c \
+	tact_mdl_sms.c \
+	tact_mdl_gprs.c \
+	tact_mdl_gprs_server.c \
+	tact_mdl_mqtt.c \
 	ringslice.c \
 	ringslice_scanf.c \
 	test.c \
-	asc_port.c \
+	tact_port.c \
 	et.c \
 	et_host.c
 
@@ -97,7 +97,7 @@ LIBS     :=
 # defines...
 # Use a larger pool for host tests because 64-bit hosts have wider pointers
 # and therefore larger queued descriptors than the embedded 32-bit targets.
-DEFINES  := -DASC_TEST -DASC_MEMORY_POOL_SIZE=8192
+DEFINES  := -DTACT_TEST -DTACT_MEMORY_POOL_SIZE=8192
 
 #============================================================================
 # Typically you should not need to change anything below this line
