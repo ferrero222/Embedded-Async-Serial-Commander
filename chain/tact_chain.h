@@ -1,10 +1,10 @@
 /******************************************************************************
- *                              _    ____   ____                              *
- *                   ======    / \  / ___| / ___| ======       (c)03.10.2025  *
- *                   ======   / _ \ \___ \| |     ======           v1.0.0     *
- *                   ======  / ___ \ ___) | |___  ======                      *
- *                   ====== /_/   \_\____/ \____| ======                      *  
- *                                                                            *
+ *              _____      _       ____   _____  ======                      *
+ *      ====== |_   _|    / \     / ___| |_   _| ======    (c)03.10.2025     *
+ *      ======   | |     / _ \   | |       | |   ======        v1.0.0        *
+ *      ======   | |    / ___ \  | |___    | |   ======                      *
+ *      ======   |_|   /_/   \_\  \____|   |_|   ======                      *
+ *                                                                           *
  ******************************************************************************/
 #ifndef TACT_CHAIN_H
 #define TACT_CHAIN_H
@@ -43,18 +43,23 @@
   .execution_count = 0,                                                                       \
 }
 
-/**
- * @brief Create exec step
- * @param name Step name
- * @param true_target Target step name when exec is true
- * @param false_target Target step name when exec is false
- * @param exec_func exec function
- */
-#define TACT_CHAIN_EXEC(name_, true_target_, false_target_, exec_func_) \
+/*******************************************************************************
+ * @brief Create a synchronous EXEC step with caller-owned parameters.
+ * @details The function receives the chain's TACT context and param unchanged.
+ *          The parameter remains borrowed and must outlive all step executions.
+ *          False may mean pending progress, depending on the chosen loop targets.
+ * @param[in] name_ Step name.
+ * @param[in] true_target_ Target when the function returns true.
+ * @param[in] false_target_ Target when the function returns false.
+ * @param[in] exec_func_ Synchronous function to execute.
+ * @param[in,out] param_ Caller-owned parameters, or NULL.
+ ******************************************************************************/
+#define TACT_CHAIN_EXEC(name_, true_target_, false_target_, exec_func_, param_) \
 {                                                                      \
   .type = TACT_CHAIN_STEP_EXEC,                                         \
   .name = name_,                                                       \
   .action.exec.function = exec_func_,                                  \
+  .action.exec.param = param_,                                         \
   .action.exec.true_target = true_target_,                             \
   .action.exec.false_target = false_target_,                           \
   .state = TACT_CHAIN_STEP_IDLE,                                        \
@@ -138,7 +143,8 @@ typedef struct {
       uint8_t max_retries;         // Maximum total attempts, including the initial call (0 means one)
     } func;   
     struct {   
-      bool (*function)(void);      // exec function
+      bool (*function)(tact_context_t* const ctx, void* const param); // Synchronous EXEC function
+      void *param;                // Borrowed mutable EXEC parameters
       const char *true_target;     // Target step when true
       const char *false_target;    // Target step when false
     } exec;

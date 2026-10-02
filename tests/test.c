@@ -154,8 +154,18 @@ bool testChainFunc(tact_context_t* const ctx, const tact_entity_cb_t cb, const v
   return res;
 }
 
-bool testChainCond(void)
+/*******************************************************************************
+ * @brief Provide the always-true condition used by existing Chain examples.
+ * @details Accepts the EXEC context and borrowed parameter without changing
+ *          the original condition behavior.
+ * @param[in] ctx Unused TACT context passed automatically by the Chain.
+ * @param[in] param Unused caller-owned EXEC parameters.
+ * @retval true The condition is always satisfied.
+ ******************************************************************************/
+bool testChainCond(tact_context_t* const ctx, void* const param)
 {
+  (void)ctx;
+  (void)param;
   return true;
 }
 
@@ -1515,31 +1525,25 @@ TEST_GROUP("TACT") {
       VERIFY(!_tact_get_init(&test_ctx).init);
     }
 
-  TEST("GPRS send copies transient payload and response prefix") {
+  TEST("GPRS send queues only a copied fixed-length command and prompt") {
       tact_init(&test_ctx, test_printf, test_write, &tact_ring_buffer);
-      char payload[] = "PING";
-      char answer[] = "SEND OK";
-      tact_mdl_gprs_data_t tcp = {.data = payload, .answ = answer};
+      uint8_t payload[] = {'P', 0, '\x1A', 'G'};
+      tact_mdl_gprs_stream_t tcp = {.buffer = payload, .size = sizeof(payload), .direction = TACT_MDL_GPRS_STREAM_TX};
       VERIFY(tact_mdl_gprs_socket_send_recieve(&test_ctx, NULL, &tcp, NULL));
 
       payload[0] = 'X';
-      answer[0] = 'X';
       tact_entity_t* entity = &_tact_get_entity_queue(&test_ctx)->entity[0];
-      VERIFY(strcmp(entity->item[1].req + strlen(TACT_CMD_SAVE), "AT+CIPSEND=5\r\n") == 0);
-      VERIFY(memcmp(entity->item[2].req + strlen(TACT_CMD_SAVE), "PING", 4) == 0);
-      VERIFY((uint8_t)entity->item[2].req[strlen(TACT_CMD_SAVE) + 4u] == 0x1a);
-      VERIFY(strcmp(entity->item[2].answ.prefix + strlen(TACT_CMD_SAVE), "SEND OK") == 0);
+      VERIFY(strcmp(entity->item[2].req + strlen(TACT_CMD_SAVE), "AT+CIPSEND=4\r\n") == 0);
+      VERIFY(strcmp(entity->item[2].answ.prefix, ">") == 0);
 
       tact_deinit(&test_ctx);
       VERIFY(!_tact_get_init(&test_ctx).init);
     }
 
-  TEST("GPRS send allocation failure preserves core context") {
+  TEST("GPRS send rejects an oversized block without changing the core") {
       tact_init(&test_ctx, test_printf, test_write, &tact_ring_buffer);
-      char payload[5000];
-      memset(payload, 'D', sizeof(payload) - 1u);
-      payload[sizeof(payload) - 1u] = '\0';
-      tact_mdl_gprs_data_t tcp = {.data = payload, .answ = NULL};
+      uint8_t payload[5000];
+      tact_mdl_gprs_stream_t tcp = {.buffer = payload, .size = sizeof(payload), .direction = TACT_MDL_GPRS_STREAM_TX};
       VERIFY(!tact_mdl_gprs_socket_send_recieve(&test_ctx, NULL, &tcp, NULL));
       VERIFY(_tact_get_init(&test_ctx).init);
       VERIFY(_tact_get_entity_queue(&test_ctx)->entity_cnt == 0);
@@ -1648,7 +1652,7 @@ TEST_GROUP("TACT") {
       chain_step_t empty_name[] = { TACT_CHAIN_DELAY(0) };
       empty_name[0].name = "";
       chain_step_t ambiguous_target[] = {
-        TACT_CHAIN_EXEC("ROUTE", "DUP", "STOP", testChainCond),
+        TACT_CHAIN_EXEC("ROUTE", "DUP", "STOP", testChainCond, NULL),
         TACT_CHAIN_DELAY(0),
         TACT_CHAIN_DELAY(0),
       };
@@ -1846,7 +1850,7 @@ TEST_GROUP("TACT") {
             TACT_CHAIN("SOCKET SEND RECIVE", "NEXT", "SOCKET DISCONNECT", testChainFunc, testEntityCB, test_buffer, test_buffer, 3),
         TACT_CHAIN_LOOP_END,
 
-        TACT_CHAIN_EXEC("CHECK CONN", "NEXT", "MODEM RESET", testChainCond),
+        TACT_CHAIN_EXEC("CHECK CONN", "NEXT", "MODEM RESET", testChainCond, NULL),
         TACT_CHAIN("SOCKET DISCONNECT", "NEXT", "PREV", testChainFunc, testEntityCB, test_buffer, test_buffer, 3),
         TACT_CHAIN("GPRS DEINIT",       "NEXT", "MODEM RESET", testChainFunc, testEntityCB, test_buffer, test_buffer, 3),
         TACT_CHAIN("MODEM RESET",       "NEXT", "MODEM RESET", testChainFunc, testEntityCB, test_buffer, test_buffer, 3),
@@ -1893,7 +1897,7 @@ TEST_GROUP("TACT") {
             TACT_CHAIN_LOOP_END,
         TACT_CHAIN_LOOP_END,
 
-        TACT_CHAIN_EXEC("5",  "NEXT", "STOP", testChainCond),
+        TACT_CHAIN_EXEC("5",  "NEXT", "STOP", testChainCond, NULL),
         TACT_CHAIN("6",       "NEXT", "PREV", testChainFunc, testEntityCB, test_buffer, test_buffer, 3),
         TACT_CHAIN("7",       "NEXT", "STOP", testChainFunc, testEntityCB, test_buffer, test_buffer, 3),
         TACT_CHAIN("8",       "NEXT", "STOP", testChainFunc, testEntityCB, test_buffer, test_buffer, 3),

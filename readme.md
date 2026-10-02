@@ -116,8 +116,8 @@ tact_item_t items[] = //[REQ][PREFIX][PARCE_TYPE][RPT][WAIT][STEPERROR][STEPOK][
   TACT_ITEM("AT+CIFSR"TACT_CMD_CRLF,           TACT_CMD_FORCE, TACT_PARCE_SIMCOM, 10, 100, 0, 1, NULL, NULL, TACT_NO_ARG),
   TACT_ITEM("AT+CIPHEAD?"TACT_CMD_CRLF,        "+CIPHEAD: 1", TACT_PARCE_SIMCOM,  1, 100, 1, 2, NULL, NULL, TACT_NO_ARG),
   TACT_ITEM("AT+CIPHEAD=1"TACT_CMD_CRLF,                NULL, TACT_PARCE_SIMCOM, 10, 100, 0, 1, NULL, NULL, TACT_NO_ARG),
-  TACT_ITEM("AT+CIPSRIP?"TACT_CMD_CRLF,        "+CIPSRIP: 1", TACT_PARCE_SIMCOM,  1, 100, 1, 2, NULL, NULL, TACT_NO_ARG),
-  TACT_ITEM("AT+CIPSRIP=1"TACT_CMD_CRLF,                NULL, TACT_PARCE_SIMCOM, 10, 100, 0, 1, NULL, NULL, TACT_NO_ARG),
+  TACT_ITEM("AT+CIPSRIP?"TACT_CMD_CRLF,        "+CIPSRIP: 0", TACT_PARCE_SIMCOM,  1, 100, 1, 2, NULL, NULL, TACT_NO_ARG),
+  TACT_ITEM("AT+CIPSRIP=0"TACT_CMD_CRLF,                NULL, TACT_PARCE_SIMCOM, 10, 100, 0, 1, NULL, NULL, TACT_NO_ARG),
   TACT_ITEM("AT+CIPSHOWTP?"TACT_CMD_CRLF,    "+CIPSHOWTP: 1", TACT_PARCE_SIMCOM,  1, 100, 1, 0, NULL, NULL, TACT_NO_ARG),
   TACT_ITEM("AT+CIPSHOWTP=1"TACT_CMD_CRLF,              NULL, TACT_PARCE_SIMCOM, 10, 100, 0, 0, NULL, NULL, TACT_NO_ARG),
 };
@@ -286,25 +286,43 @@ Let's create an example chain based on the modules provided in the library:
 ```c
 chain_step_t tcp_steps[] =
 {
+  /* Caller owns TX/RX descriptors and pauses AT/URC processing in raw loops.
+   * See examples/gprs.c for message preparation and reply validation. */
   //Main
-  TACT_CHAIN("INIT_MODEM", "NEXT", "MODEM_RESTART", tact_mdl_modem_init, NULL, NULL, NULL, 1),
+  TACT_CHAIN("INIT_MODEM", "NEXT", "MODEM RESTART", tact_mdl_modem_init, NULL, NULL, NULL, 1),
   TACT_CHAIN("GPRS INIT", "NEXT", "GPRS DEINIT", tact_mdl_gprs_init, NULL, NULL, NULL, 1),
   TACT_CHAIN("SOCKET CONFIG", "NEXT", "GPRS INIT", tact_mdl_gprs_socket_config, NULL, NULL, NULL, 1),
   TACT_CHAIN("CONNECT TO SERVER", "NEXT", "SOCKET CONFIG", tact_mdl_gprs_socket_connect, NULL, &tact_server_connect, NULL, 1),
   TACT_CHAIN("GET RTD", "NEXT", "DISCONNECT FROM SERVER", tact_mdl_rtd, tact_rtd_cb, NULL, NULL, 1),
-  TACT_CHAIN_EXEC("CHECK RTD", "NEXT", "GET RTD", tact_rtd_check),
+  TACT_CHAIN_EXEC("CHECK RTD", "NEXT", "GET RTD", tact_rtd_check, NULL),
 
-  TACT_CHAIN_EXEC("CREATE WIALON LOGIN", "NEXT", "DISCONNECT FROM SERVER", tact_server_data_wialon_login),
-  TACT_CHAIN("SEND WIALON LOGIN", "NEXT", "DISCONNECT FROM SERVER", tact_mdl_gprs_socket_send_recieve, NULL, &tact_server_data, NULL, 3),
+  TACT_CHAIN_EXEC("CREATE WIALON LOGIN", "NEXT", "DISCONNECT FROM SERVER", tact_server_data_wialon_login, NULL),
+  TACT_CHAIN("SEND WIALON LOGIN", "NEXT", "DISCONNECT FROM SERVER", tact_mdl_gprs_socket_send_recieve, NULL, &tact_server_tx, NULL, 1),
+  TACT_CHAIN_LOOP_START(0),
+    TACT_CHAIN_EXEC("LOGIN TX", "LOGIN SEND RESULT", "NEXT", tact_mdl_gprs_stream_tx, &tact_server_tx),
+  TACT_CHAIN_LOOP_END,
+  TACT_CHAIN("LOGIN SEND RESULT", "NEXT", "DISCONNECT FROM SERVER", tact_mdl_gprs_socket_send_end, NULL, NULL, NULL, 1),
+  TACT_CHAIN_LOOP_START(0),
+    TACT_CHAIN_EXEC("LOGIN RX", "LOGIN CHECK REPLY", "NEXT", tact_mdl_gprs_stream_rx, &tact_server_rx),
+  TACT_CHAIN_LOOP_END,
+  TACT_CHAIN_EXEC("LOGIN CHECK REPLY", "NEXT", "DISCONNECT FROM SERVER", tact_server_answer_check, NULL),
 
   TACT_CHAIN_LOOP_START(10),
-    TACT_CHAIN("GET RTD", "NEXT", "DISCONNECT FROM SERVER", tact_mdl_rtd, tact_rtd_cb, NULL, NULL, 1),
-    TACT_CHAIN_EXEC("CREATE WIALON DATA", "NEXT", "DISCONNECT FROM SERVER", tact_server_data_wialon_packet),
-    TACT_CHAIN("SEND WIALON DATA", "NEXT", "DISCONNECT FROM SERVER", tact_mdl_gprs_socket_send_recieve, NULL, &tact_server_data, NULL, 3),
+    TACT_CHAIN("GET RTD LOOP", "NEXT", "DISCONNECT FROM SERVER", tact_mdl_rtd, tact_rtd_cb, NULL, NULL, 1),
+    TACT_CHAIN_EXEC("CREATE WIALON DATA", "NEXT", "DISCONNECT FROM SERVER", tact_server_data_wialon_packet, NULL),
+    TACT_CHAIN("SEND WIALON DATA", "NEXT", "DISCONNECT FROM SERVER", tact_mdl_gprs_socket_send_recieve, NULL, &tact_server_tx, NULL, 1),
+    TACT_CHAIN_LOOP_START(0),
+      TACT_CHAIN_EXEC("DATA TX", "DATA SEND RESULT", "NEXT", tact_mdl_gprs_stream_tx, &tact_server_tx),
+    TACT_CHAIN_LOOP_END,
+    TACT_CHAIN("DATA SEND RESULT", "NEXT", "DISCONNECT FROM SERVER", tact_mdl_gprs_socket_send_end, NULL, NULL, NULL, 1),
+    TACT_CHAIN_LOOP_START(0),
+      TACT_CHAIN_EXEC("DATA RX", "DATA CHECK REPLY", "NEXT", tact_mdl_gprs_stream_rx, &tact_server_rx),
+    TACT_CHAIN_LOOP_END,
+    TACT_CHAIN_EXEC("DATA CHECK REPLY", "NEXT", "DISCONNECT FROM SERVER", tact_server_answer_check, NULL),
     TACT_CHAIN_DELAY(1000),
   TACT_CHAIN_LOOP_END,
 
-  TACT_CHAIN_EXEC("WIALON DATA CLEAN", "STOP", "HARD RESET", tact_server_data_clean),
+  TACT_CHAIN_EXEC("WIALON DATA CLEAN", "STOP", "HARD RESET", tact_server_data_clean, NULL),
 
   //Error
   TACT_CHAIN("GPRS DEINIT", "GPRS INIT", "MODEM RESTART", tact_mdl_gprs_deinit, NULL, NULL, NULL, 1),
@@ -312,7 +330,7 @@ chain_step_t tcp_steps[] =
   TACT_CHAIN("MODEM RESTART", "GPRS INIT", "MODEM RESTART", tact_mdl_modem_reset, NULL, NULL, NULL, 1),
 
   //Critical
-  TACT_CHAIN_EXEC("HARD RESET", "STOP", "STOP", tact_hard_reset),
+  TACT_CHAIN_EXEC("HARD RESET", "STOP", "STOP", tact_hard_reset, NULL),
 };
 
 tact_chain_t* chain = tact_chain_create("TCP", tcp_steps, sizeof(tcp_steps)/sizeof(chain_step_t), ctx);
@@ -330,6 +348,157 @@ if(!tact_chain_destroy_ex(chain)) {
 ```
 
 This chain one-time configures the SIMCOM modem, context, and connection, gets real-time data, checks it, and then 10 times starts collecting and sending this data to the server with a period of 10 seconds, after preliminary authorization. In case of an error, disconnection or deinitialization occurs with an attempt to reinitialize and reconnect or a complete restart.
+
+### Raw stream EXEC parameters
+
+EXEC actions receive the Chain context and a caller-owned mutable parameter:
+
+```c
+bool action(tact_context_t *ctx, void *param);
+```
+
+FTP provides two raw byte operations, `tact_mdl_ftp_stream_tx` and
+`tact_mdl_ftp_stream_rx`. Both use the same descriptor, owned by the caller:
+
+```c
+uint8_t payload[512] = {0}; /* Fill before starting the upload. */
+tact_mdl_ftp_stream_t tx =
+{
+  .buffer = payload,
+  .size = sizeof(payload),
+  .count = 0,
+  .direction = TACT_MDL_FTP_STREAM_TX
+};
+tact_mdl_ftp_upload_t upload =
+{
+  .remote_path = "can1.bin",
+  .size = sizeof(payload),
+  .offset = 0
+};
+
+/* Prerequisites: FTP service/login/binary type are ready, and this Chain
+ * exclusively owns the UART. The surrounding worker must not process AT/URCs
+ * during the raw loop; resume AT processing for FTP END afterwards. */
+chain_step_t put_steps[] =
+{
+  TACT_CHAIN("FTP BEGIN", "NEXT", "STOP", tact_mdl_ftp_put_begin,
+             NULL, &upload, NULL, 1),
+  TACT_CHAIN_LOOP_START(0),
+    TACT_CHAIN_EXEC("FTP TX", "FTP END", "NEXT", tact_mdl_ftp_stream_tx, &tx),
+    /* Caller EXEC steps may inspect progress or handle other work here. */
+  TACT_CHAIN_LOOP_END,
+  TACT_CHAIN("FTP END", "STOP", "STOP", tact_mdl_ftp_put_end,
+             NULL, NULL, NULL, 1),
+};
+```
+
+Each call transfers at most `TACT_MDL_FTP_STREAM_BLOCK` bytes and returns true
+when `count == size`. False means pending progress or invalid input. Deadlines
+and recovery belong to the Chain: add a caller-defined timeout branch if the
+peer may stop making progress. Do not busy-wait an infinite loop without yielding.
+Use the surrounding task's scheduler and monotonic clock for raw-phase yields
+and deadlines. Do not use TACT_CHAIN_DELAY while tact_core_proc is paused:
+its tick counter advances only when the core is serviced.
+
+PUT specifies the data length (1..2048 bytes) explicitly; `tx.size` must match
+`upload.size`. Payload bytes are sent unchanged, including NUL, ETX, and Ctrl+Z.
+Do not append a terminator. For the next file block, prepare its buffer, reset
+`count`, and update `upload.size` and the remote REST `upload.offset`. The server
+result is obtained by FTP END; a completed TX counter alone does not prove upload
+success.
+
+For receive, set direction to `TACT_MDL_FTP_STREAM_RX`, set `size` to the expected
+payload length, reset `count`, and use `tact_mdl_ftp_stream_rx` in the same loop
+pattern. Consume the text payload header first. RX reads only the expected bytes
+from the existing UART ring and leaves trailing protocol bytes untouched. FTP
+download headers and chunk boundaries are handled by the caller, not by this
+byte-copy operation.
+
+The raw operations create no tasks, suspend no workers, allocate no buffers,
+and store no global transfer state. The current GSM worker is not automatically
+paused by them. The surrounding integration must exclude `tact_core_proc` and
+other RX consumers during raw receive, and prevent AT commands during raw TX.
+Configure the TACT port critical-section hooks to protect the ring from its UART
+ISR producer; the default hooks are no-ops. The transport write callback must
+return the exact accepted byte count, with zero meaning no bytes sent. Returning
+zero after a partial physical transmission does not satisfy this contract and
+must not be treated as a safe retry.
+
+### GPRS binary stream
+
+The legacy SIM800/SIM868 GPRS module uses the same caller-owned stream layout as
+FTP, plus `remaining`: bytes left in the current `+IPD` payload. There is no
+extra ring, heap-allocated packet, callback, or hidden transfer state in the new
+EXEC operations. The older `tact_mdl_gprs_server` chunk-handler API remains for
+compatibility; do not use it as a second consumer of the same RX ring.
+
+`tact_mdl_gprs_socket_send_recieve` now takes `tact_mdl_gprs_stream_t`, not the
+old text/answer descriptor. It disables echo, queues `AT+CIPSEND=size`, and
+completes at `>`. Echo stays disabled; reconfigure it separately if needed.
+Send exactly `size` bytes using `tact_mdl_gprs_stream_tx`; no Ctrl+Z or CR/LF is
+appended. `tact_mdl_gprs_socket_send_end` separately waits for `SEND OK`.
+A completed TX counter means UART transfer, not modem/server acknowledgement.
+One send is limited to `TACT_MDL_GPRS_SEND_MAX` and must fit the modem's current
+`AT+CIPSEND?` allowance.
+
+```c
+uint8_t request[] = {'P', 0, 0x1A, 'G'};
+uint8_t reply[8] = {0};
+tact_mdl_gprs_stream_t tx =
+{
+  .buffer = request,
+  .size = sizeof(request),
+  .direction = TACT_MDL_GPRS_STREAM_TX
+};
+tact_mdl_gprs_stream_t rx =
+{
+  .buffer = reply,
+  .size = sizeof(reply),
+  .direction = TACT_MDL_GPRS_STREAM_RX,
+  .remaining = 0
+};
+
+chain_step_t socket_steps[] =
+{
+  TACT_CHAIN("GPRS PROMPT", "NEXT", "STOP", tact_mdl_gprs_socket_send_recieve,
+             NULL, &tx, NULL, 1),
+  TACT_CHAIN_LOOP_START(0),
+    TACT_CHAIN_EXEC("GPRS TX", "GPRS SEND RESULT", "NEXT", tact_mdl_gprs_stream_tx, &tx),
+  TACT_CHAIN_LOOP_END,
+  TACT_CHAIN("GPRS SEND RESULT", "NEXT", "STOP", tact_mdl_gprs_socket_send_end,
+             NULL, NULL, NULL, 1),
+  TACT_CHAIN_LOOP_START(0),
+    TACT_CHAIN_EXEC("GPRS RX", "STOP", "NEXT", tact_mdl_gprs_stream_rx, &rx),
+  TACT_CHAIN_LOOP_END,
+};
+```
+
+Run after socket configuration/connection. Raw loops require the same UART
+ownership, critical hooks, scheduler yields, and monotonic deadlines described
+for FTP. The sample assumes a request/reply peer that does not deliver unrelated
+binary traffic while the text worker waits for SEND OK. An asynchronous socket
+requires caller-controlled text/binary RX routing: do not run the generic AT/URC
+parser through an unsolicited binary packet, including while awaiting SEND OK.
+
+RX expects `+IPD,<length>,TCP:<payload>` (or `UDP`) with CIPMUX=0, CIPHEAD=1,
+CIPSHOWTP=1 and automatic reception (CIPRXGET=0). Socket configuration sets these
+options, disables the remote-address prompt (CIPSRIP=0), and enables the send
+prompt/result (CIPSPRT=1). The format follows the
+[SIMCom AT command manual](https://simcom.ee/documents/SIM868/SIM800%20Series_AT%20Command%20Manual_V1.10.pdf),
+sections 8.2.3, 8.2.17, 8.2.20, 8.2.24 and 8.2.26. This is not the future A76xx TCP module.
+
+Set RX `size` to the expected **payload** length, excluding +IPD headers. It
+may arrive in several UART fragments or several +IPD blocks. Only payload bytes
+increment `count`; NUL, CR/LF, and +IPD inside a payload remain literal bytes.
+Completion is `count == size`, not a newline or TCP packet boundary. If the
+application reply length is unknown, read bounded chunks and let the application
+protocol determine its complete-message length.
+
+After one RX buffer fills, replace `buffer`/`size` and reset `count`, preserving
+`remaining` so the next call continues an unfinished +IPD block. Reset the whole
+RX context only for a new connection or after explicitly discarding its old ring
+data. Text between payload blocks is skipped, not reported as URCs; the caller
+must separately route status/errors if they are required.
 
 ### Chain Parameters
 
@@ -349,7 +518,8 @@ So, let's look at what can be used in a chain and what parameters can be passed 
 *   **[Name]** - Step name.
 *   **[True target]** - Name of the step to go to in case of success. You can specify NULL or "NEXT" for step +1, or "PREV" for step -1, or a specific step name. "STOP" will end chain execution.
 *   **[False target]** - The same as for success, but in case of error.
-*   **[Exec func]** - Function to execute. Must be of type `bool (*exec)(void);` Its execution result affects the next transition.
+*   **[Exec func]** - Function to execute. Must be of type `bool (*exec)(tact_context_t *ctx, void *param);` The Chain passes its own TACT context automatically; the result selects the next transition.
+*   **[Param]** - Borrowed mutable parameter pointer passed unchanged to the EXEC function; use NULL when unused. The referenced object must outlive all executions.
 
 **TACT_CHAIN_LOOP_START** - Macro to indicate the start of a following loop, contains:
 *   **[Iterations]** - Number of loop iterations. 0 - Infinite.

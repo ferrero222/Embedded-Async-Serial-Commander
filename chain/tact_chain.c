@@ -1,10 +1,10 @@
 /******************************************************************************
- *                              _    ____   ____                              *
- *                   ======    / \  / ___| / ___| ======       (c)03.10.2025  *
- *                   ======   / _ \ \___ \| |     ======           v1.0.0     *
- *                   ======  / ___ \ ___) | |___  ======                      *
- *                   ====== /_/   \_\____/ \____| ======                      *  
- *                                                                            *
+ *              _____      _       ____   _____  ======                      *
+ *      ====== |_   _|    / \     / ___| |_   _| ======    (c)03.10.2025     *
+ *      ======   | |     / _ \   | |       | |   ======        v1.0.0        *
+ *      ======   | |    / ___ \  | |___    | |   ======                      *
+ *      ======   |_|   /_/   \_\  \____|   |_|   ======                      *
+ *                                                                           *
  ******************************************************************************/
 /*******************************************************************************
  * Include files
@@ -349,6 +349,7 @@ static bool tact_chain_step_function_proc(tact_chain_t* chain, chain_step_t* con
   switch(step->state) 
   {
      case TACT_CHAIN_STEP_IDLE: 
+          {
           TACT_DEBUG(chain->ctx, "[TACT][INFO] Starting step '%s'", step->name); // Start executing the function
           step->state = TACT_CHAIN_STEP_RUNNING;
           chain->pending_step = chain->current_step;
@@ -365,6 +366,7 @@ static bool tact_chain_step_function_proc(tact_chain_t* chain, chain_step_t* con
             if(step->execution_count < UINT8_MAX) ++step->execution_count;
           }
           break; 
+          }
      case TACT_CHAIN_STEP_RUNNING: // Waiting for callback - do nothing this cycle
           break;
      case TACT_CHAIN_STEP_SUCCESS: 
@@ -404,14 +406,21 @@ static bool tact_chain_step_function_proc(tact_chain_t* chain, chain_step_t* con
   return true;
 }
 
-/** 
- * @brief Chain step exec proc
- */
+/*******************************************************************************
+ * @brief Execute one synchronous action and follow its result target.
+ * @details Passes the chain's TACT context and the borrowed parameter pointer
+ *          directly to the action. The action may update its parameter between
+ *          loop iterations; no copy or asynchronous callback is introduced.
+ * @param[in,out] chain Running chain whose current step is being executed.
+ * @param[in,out] step EXEC step with its function, parameter, and targets.
+ * @retval true The action ran and its transition was accepted.
+ * @retval false The function is missing or the transition failed.
+ ******************************************************************************/
 static bool tact_chain_step_exec_proc(tact_chain_t* chain, chain_step_t* const step)
 {
   if(step->action.exec.function) // Exec are executed synchronously
   {
-    bool exec_result = step->action.exec.function();
+    bool exec_result = step->action.exec.function(chain->ctx, step->action.exec.param);
     TACT_DEBUG(chain->ctx, "[TACT][INFO] Execution '%s': %s", step->name, exec_result ? "true" : "false");
     const char *target = exec_result ? step->action.exec.true_target : step->action.exec.false_target;  // Jump based on exec result
     if(!tact_chain_execute_step_jump(chain, target)) 
